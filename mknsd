@@ -1,0 +1,81 @@
+#!/usr/bin/env ruby
+
+require 'ostruct'
+
+servers = File.open('servers.txt')
+  .readlines
+  .map(&:strip)
+  .map { |line| line.split(/\s+/, 4) }
+  .map { |(ns, a, *b)| [a, OpenStruct.new(%w[name nameserver? v4 v6].zip([a, ns=='y'] + b).to_h)] }
+  .to_h
+  .then { |x| OpenStruct.new(x) }
+
+dns_servers = servers.each_pair.map{|(n, v)| v}.select(&:nameserver?)
+
+def print_zone(filename, servers, dns_servers, version = '1')
+  lines = []
+  zonename = nil
+
+  File
+    .open(filename)
+    .readlines
+    .map(&:strip)
+    .reject(&:empty?)
+    .map { |line| line.split(/\s+/, 3) }
+    .each do |instruction, arg0, arg1|
+      case instruction
+      when 'zone'
+        zonename = arg0
+        lines << "$ORIGIN #{arg0}"
+        lines << '$TTL 300'
+        if arg1.nil?
+          lines << "@    IN SOA  a.ns root #{version} 7200 3600 1209600 3600"
+          lines << '@    IN NS   a.ns'
+          lines << '@    IN NS   b.ns'
+          dns_servers.each_with_index do |server, idx|
+            lines << "#{"abcd"[idx]}.ns IN A    #{server.v4}" if server.v4
+            lines << "#{"abcd"[idx]}.ns IN AAAA #{server.v6}" if server.v6
+          end
+        else
+          lines << "@    IN SOA  a.ns.#{arg1} root #{version} 7200 3600 1209600 3600"
+          lines << "@    IN NS   a.ns.#{arg1}"
+          lines << "@    IN NS   b.ns.#{arg1}"
+        end
+
+      when 'alias'
+        lines << "#{arg0} IN A    #{servers[arg1].v4}" if servers[arg1].v4
+        lines << "#{arg0} IN AAAA #{servers[arg1].v6}" if servers[arg1].v6
+
+      when 'cname'
+        lines << "#{arg0} IN CNAME #{arg1}"
+      when 'mx'
+        lines << "#{arg0} IN MX #{arg1}"
+      when 'txt'
+        lines << "#{arg0} IN TXT #{arg1}"
+      end
+    end
+
+  [zonename, lines.map { |x| "#{x}\n" }.join]
+end
+
+`mkdir -p build/zones`
+`mkdir -p build/nsd.conf.d`
+
+Dir['zones/*'].each do |zonefile|
+  name, contents = print_zone(zonefile, servers, dns_servers)
+  name.gsub!(/\.$/, '')
+
+  File.write(
+    "build/nsd.conf.d/#{name}.conf",
+    ['zone:', "  name: #{name}", "  zonefile: /etc/nsd/zones/#{name}"].map { |x| "#{x}\n" }.join,
+  )
+
+  File.write("build/zones/#{name}", contents)
+end
+
+dns_servers.each do |server|
+  server = server.name
+  `rsync -r build/zones/ #{server}:/etc/nsd/zones/`
+  `rsync -r build/nsd.conf.d/ #{server}:/etc/nsd/nsd.conf.d/`
+  `ssh #{server} service nsd restart`
+end

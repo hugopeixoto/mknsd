@@ -10,16 +10,18 @@ everything that DNS can provide.
 It requires that you setup a `$CWD/servers.txt` file that looks something like this:
 
 ```
-y server1 111.111.111.111   2a11:1111:1:11::111:11
-y server2 222.222.222.222
-n server3 112.112.112.112   2a11:1111:1111:1111::1
-n server4 221.221.221.221
+a server1 111.111.111.111   2a11:1111:1:11::111:11
+b server2 222.222.222.222
+c server3 112.112.112.112   2a11:1111:1111:1111::1
+- server4 221.221.221.221
 ```
 
-Each line represents a server. The first argument is 'y/n' if it's a nameserver
-or not. The second argument is a custom name for the server. Nameserver names
-must be sshable (`ssh server2`). The third one is the ipv4 address and the
-fourth is an optional ipv6 address.
+Each line represents a server. If the first argument is '-', the server won't
+be considered a nameserver. If it's anything else, it will be considered a
+nameserver and the string will be used to create the subdomain
+`<arg0>.ns.<domain>`, used in NS and glue records. The second argument is a
+custom name for the server. Nameserver names must be sshable (`ssh server2`).
+The third one is the ipv4 address and the fourth is an optional ipv6 address.
 
 You can then specify a zone file in the `$CWD/zones/` directory. For example:
 

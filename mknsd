@@ -2,15 +2,31 @@
 
 require 'ostruct'
 
-servers = File.open('servers.txt')
-  .readlines
-  .map(&:strip)
-  .map { |line| line.split(/\s+/, 4) }
-  .map { |(ns, a, *b)| [a, OpenStruct.new(%w[name nameserver? v4 v6].zip([a, ns=='y'] + b).to_h)] }
-  .to_h
-  .then { |x| OpenStruct.new(x) }
+class Server
+  attr_reader :name, :v4, :v6
+  def initialize(parts)
+    @nameserver = parts[0]
+    @name = parts[1]
+    @v4   = parts[2]
+    @v6   = parts[3]
+  end
 
-dns_servers = servers.each_pair.map{|(n, v)| v}.select(&:nameserver?)
+  def nameserver?
+    @nameserver != '-'
+  end
+
+  def ns
+    @nameserver
+  end
+end
+
+def read_servers(filename)
+  File.open(filename)
+    .readlines
+    .map(&:strip)
+    .map { |line| line.split(/\s+/, 4) }
+    .map { |parts| Server.new(parts) }
+end
 
 def print_zone(filename, servers, dns_servers, version = '1')
   lines = []
@@ -30,21 +46,24 @@ def print_zone(filename, servers, dns_servers, version = '1')
         lines << '$TTL 300'
         if arg1.nil?
           lines << "@    IN SOA  a.ns root #{version} 7200 3600 1209600 3600"
-          lines << '@    IN NS   a.ns'
-          lines << '@    IN NS   b.ns'
-          dns_servers.each_with_index do |server, idx|
-            lines << "#{"abcd"[idx]}.ns IN A    #{server.v4}" if server.v4
-            lines << "#{"abcd"[idx]}.ns IN AAAA #{server.v6}" if server.v6
+          dns_servers.each do |server|
+            lines << "@    IN NS   #{server.ns}.ns"
+          end
+          dns_servers.each do |server|
+            lines << "#{server.ns}.ns IN A    #{server.v4}" if server.v4
+            lines << "#{server.ns}.ns IN AAAA #{server.v6}" if server.v6
           end
         else
           lines << "@    IN SOA  a.ns.#{arg1} root #{version} 7200 3600 1209600 3600"
-          lines << "@    IN NS   a.ns.#{arg1}"
-          lines << "@    IN NS   b.ns.#{arg1}"
+          dns_servers.each do |server|
+            lines << "@    IN NS   #{server.ns}.ns.#{arg1}"
+          end
         end
 
       when 'alias'
-        lines << "#{arg0} IN A    #{servers[arg1].v4}" if servers[arg1].v4
-        lines << "#{arg0} IN AAAA #{servers[arg1].v6}" if servers[arg1].v6
+        server = servers.find { |s| s.name == arg1 }
+        lines << "#{arg0} IN A    #{server.v4}" if server.v4
+        lines << "#{arg0} IN AAAA #{server.v6}" if server.v6
 
       when 'cname'
         lines << "#{arg0} IN CNAME #{arg1}"
@@ -58,24 +77,40 @@ def print_zone(filename, servers, dns_servers, version = '1')
   [zonename, lines.map { |x| "#{x}\n" }.join]
 end
 
-`mkdir -p build/zones`
-`mkdir -p build/nsd.conf.d`
+def build(servers, dns_servers)
+  `mkdir -p build/zones`
+  `mkdir -p build/nsd.conf.d`
 
-Dir['zones/*'].each do |zonefile|
-  name, contents = print_zone(zonefile, servers, dns_servers)
-  name.gsub!(/\.$/, '')
+  Dir['zones/*'].each do |zonefile|
+    name, contents = print_zone(zonefile, servers, dns_servers)
+    name.gsub!(/\.$/, '')
 
-  File.write(
-    "build/nsd.conf.d/#{name}.conf",
-    ['zone:', "  name: #{name}", "  zonefile: /etc/nsd/zones/#{name}"].map { |x| "#{x}\n" }.join,
-  )
+    File.write(
+      "build/nsd.conf.d/#{name}.conf",
+      ['zone:', "  name: #{name}", "  zonefile: /etc/nsd/zones/#{name}"].map { |x| "#{x}\n" }.join,
+    )
 
-  File.write("build/zones/#{name}", contents)
+    File.write("build/zones/#{name}", contents)
+  end
 end
 
-dns_servers.each do |server|
-  server = server.name
-  `rsync -r build/zones/ #{server}:/etc/nsd/zones/`
-  `rsync -r build/nsd.conf.d/ #{server}:/etc/nsd/nsd.conf.d/`
-  `ssh #{server} service nsd restart`
+def deploy(dns_servers)
+  dns_servers.each do |server|
+    server = server.name
+    `rsync -r build/zones/ #{server}:/etc/nsd/zones/`
+    `rsync -r build/nsd.conf.d/ #{server}:/etc/nsd/nsd.conf.d/`
+    `ssh #{server} service nsd restart`
+  end
+end
+
+servers = read_servers('servers.txt')
+dns_servers = servers.select(&:nameserver?)
+
+if ARGV[0] == "build"
+  build(servers, dns_servers)
+elsif ARGV[0] == "deploy"
+  deploy(dns_servers)
+else
+  build(servers, dns_servers)
+  deploy(dns_servers)
 end

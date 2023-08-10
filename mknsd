@@ -60,16 +60,24 @@ def print_zone(filename, servers, dns_servers, version = '1')
           end
         end
 
+      when 'ns'
+        lines << "#{arg0} IN NS #{arg1}"
+
       when 'alias'
         server = servers.find { |s| s.name == arg1 }
         lines << "#{arg0} IN A    #{server.v4}" if server.v4
         lines << "#{arg0} IN AAAA #{server.v6}" if server.v6
 
+      when 'a'
+        lines << "#{arg0} IN A #{arg1}"
+      when 'aaaa'
+        lines << "#{arg0} IN AAAA #{arg1}"
       when 'cname'
         lines << "#{arg0} IN CNAME #{arg1}"
       when 'mx'
         lines << "#{arg0} IN MX #{arg1}"
       when 'txt'
+        arg1 = arg1.chars.each_slice(250).map(&:join).map{|x| x.inspect }.join(" ")
         lines << "#{arg0} IN TXT #{arg1}"
       end
     end
@@ -80,6 +88,8 @@ end
 def build(servers, dns_servers)
   `mkdir -p build/zones`
   `mkdir -p build/nsd.conf.d`
+  `rm -r build/zones/*`
+  `rm -r build/nsd.conf.d/*`
 
   Dir['zones/*'].each do |zonefile|
     name, contents = print_zone(zonefile, servers, dns_servers)
@@ -97,8 +107,8 @@ end
 def deploy(dns_servers)
   dns_servers.each do |server|
     server = server.name
-    `rsync -r build/zones/ #{server}:/etc/nsd/zones/`
-    `rsync -r build/nsd.conf.d/ #{server}:/etc/nsd/nsd.conf.d/`
+    `rsync --delete -r build/zones/ #{server}:/etc/nsd/zones/`
+    `rsync --delete -r build/nsd.conf.d/ #{server}:/etc/nsd/nsd.conf.d/`
     `ssh #{server} service nsd restart`
   end
 end
